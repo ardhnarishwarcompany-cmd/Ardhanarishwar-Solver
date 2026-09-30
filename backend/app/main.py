@@ -1,0 +1,225 @@
+import json
+import logging
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, field_validator
+
+from app.services.llm import OllamaError
+from app.services.orchestrator import route_message, stream_message
+from app.interview.routes import router as interview_router
+from app.interview.session_routes import router as session_router
+from app.interview.service import init_db as init_interview_db
+from app.interview.session_service import init_session_db
+from app.rag.routes import router as rag_router
+from app.services.memory_routes import router as memory_router
+from app.services.user_memory import init_db as init_memory_db
+from app.rag.ingestion import ingest_document
+from app.services.security import (
+    get_allowed_origins,
+    sanitize_for_log,
+    validate_message,
+    is_valid_id,
+    chat_limiter,
+    get_client_key,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Startup: ingest approved knowledge documents into local RAG
+async def _ingest_approved_knowledge():
+    try:
+        import os
+        knowledge_dir = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge")
+        knowledge_dir = os.path.abspath(knowledge_dir)
+        if os.path.isdir(knowledge_dir):
+            for fname in sorted(os.listdir(knowledge_dir)):
+                if fname.lower().endswith((".md", ".txt")):
+                    fpath = os.path.join(knowledge_dir, fname)
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            text = f.read()
+                        if text.strip():
+                            doc_id = f"knowledge_{os.path.splitext(fname)[0]}"
+                            # Use store directly to avoid HTTP round-trip and rate limiting
+                            from app.rag.store import get_store
+                            store = get_store()
+                            # Check if already exists
+                            if store.get_document(doc_id) is None:
+                                ingest_document(text=text, title=fname, source=f"knowledge/{fname}", doc_id=doc_id)
+                                logger.info(f"Ingested knowledge document: {fname}")
+                    except Exception as e:
+                        logger.warning(f"Failed to ingest knowledge document {fname}: {sanitize_for_log(str(e), 200)}")
+    except Exception as e:
+        logger.warning(f"Knowledge ingestion failed: {sanitize_for_log(str(e), 300)}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    # Initialize interview DB and user memory DB
+    try:
+        init_interview_db()
+        init_session_db()
+        init_memory_db()
+        logger.info("Interview DB and Memory DB initialized")
+    except Exception as e:
+        # Do not log raw exception with potential sensitive path info verbatim
+        logger.warning(f"DB init failed: {sanitize_for_log(str(e), 300)}")
+
+    # Ingest approved knowledge documents into local RAG
+    await _ingest_approved_knowledge()
+
+    yield
+    # Shutdown (if needed)
+    pass
+
+
+app = FastAPI(title="Ardhnarishwar Solver Backend", lifespan=lifespan)
+
+# CORS: env-configurable, tight methods/headers for internal use
+allowed_origins = get_allowed_origins()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # Minimal CSP for API — frontend handles UI CSP
+    response.headers["Content-Security-Policy"] = "default-src 'none'"
+    return response
+
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_id: str | None = None
+    user_id: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def validate_message_field(cls, v: str) -> str:
+        return validate_message(v)
+
+    @field_validator("conversation_id")
+    @classmethod
+    def validate_conv_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("conversation_id must be a string")
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 64:
+            raise ValueError("conversation_id too long (max 64)")
+        if not is_valid_id(v, 64):
+            raise ValueError("conversation_id contains invalid characters")
+        return v
+
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("user_id must be a string")
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) > 64:
+            raise ValueError("user_id too long (max 64)")
+        if not is_valid_id(v, 64):
+            raise ValueError("user_id contains invalid characters")
+        return v
+
+
+class ChatResponse(BaseModel):
+    response: str
+    model: str = "qwen2.5:3b"
+    intent: str
+    agent: str | None = None
+    routing_reason: str | None = None
+    conversation_id: str | None = None
+    rag_used: bool | None = None
+    rag_sources: list | None = None
+    rag_count: int | None = None
+    done_reason: str | None = None
+
+
+@app.get("/")
+async def root():
+    return {"service": "ardhnarishwar-backend", "message": "Backend is running"}
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "ardhnarishwar-backend"}
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(body: ChatRequest, request: Request):
+    # Basic rate limiting (prototype): 30/min per IP
+    key = get_client_key(request)
+    allowed, retry_after = chat_limiter.is_allowed(key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Too many requests. Try again in {retry_after}s")
+    # Pydantic already validated message length etc.
+    try:
+        result = await route_message(body.message.strip(), conversation_id=body.conversation_id, user_id=body.user_id)
+        return ChatResponse(
+            response=result["response"],
+            intent=result["intent"],
+            agent=result.get("agent"),
+            routing_reason=result.get("routing_reason"),
+            conversation_id=result.get("conversation_id"),
+            rag_used=result.get("rag_used"),
+            rag_sources=result.get("rag_sources"),
+            rag_count=result.get("rag_count"),
+            done_reason=result.get("done_reason"),
+        )
+    except OllamaError as e:
+        # Use existing error handling without exposing stack traces
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+    except Exception as e:
+        logger.exception("Unexpected error in chat endpoint")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(body: ChatRequest, request: Request):
+    # Rate limit streaming as well
+    key = get_client_key(request)
+    allowed, retry_after = chat_limiter.is_allowed(key)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=f"Too many requests. Try again in {retry_after}s")
+
+    async def event_generator():
+        try:
+            async for event in stream_message(body.message.strip(), conversation_id=body.conversation_id, user_id=body.user_id):
+                yield f"data: {json.dumps(event)}\n\n"
+        except OllamaError as e:
+            yield f"data: {json.dumps({'type': 'error', 'detail': e.message})}\n\n"
+        except Exception:
+            logger.exception("Unexpected error in stream endpoint")
+            yield f"data: {json.dumps({'type': 'error', 'detail': 'Internal server error'})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+app.include_router(interview_router)
+app.include_router(session_router)
+app.include_router(rag_router)
+app.include_router(memory_router)

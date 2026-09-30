@@ -1,0 +1,869 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import { checkBackendHealth, sendChatMessage, sendChatMessageStream } from './api'
+import { InterviewSchedule, InterviewScheduledCard, InterviewLobby, InterviewList } from './InterviewViews'
+import { InterviewSession } from './InterviewSession'
+import { useChatVoice } from './useChatVoice'
+import './App.css'
+
+const STORAGE_KEY = 'ard_conversations'
+const CURRENT_CONV_KEY = 'ard_conversation_id'
+const SESSION_INIT_KEY = 'ard_session_initialized'
+
+function loadConversations() {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored) return JSON.parse(stored)
+  } catch {}
+  return []
+}
+
+function saveConversations(conversations) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations))
+  } catch {}
+}
+
+function getActiveConversationId() {
+  try {
+    const stored = sessionStorage.getItem(CURRENT_CONV_KEY)
+    if (stored) return stored
+  } catch {}
+  return null
+}
+
+function setActiveConversationId(id) {
+  try {
+    if (id) {
+      sessionStorage.setItem(CURRENT_CONV_KEY, id)
+    } else {
+      sessionStorage.removeItem(CURRENT_CONV_KEY)
+    }
+  } catch {}
+}
+
+function isFreshSession() {
+  try {
+    return !sessionStorage.getItem(SESSION_INIT_KEY)
+  } catch {
+    return true
+  }
+}
+
+function markSessionInitialized() {
+  try {
+    sessionStorage.setItem(SESSION_INIT_KEY, '1')
+  } catch {}
+}
+
+function generateId() {
+  return (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)
+}
+
+// Turn the first user message into a short topic title for the sidebar,
+// e.g. "Give me the roadmap of learning in python in very short" -> "Roadmap of learning in python"
+function makeTopicTitle(raw) {
+  const original = (raw || '').replace(/\s+/g, ' ').trim()
+  if (!original) return 'New conversation'
+  let t = original
+  // trailing length/politeness requests
+  t = t.replace(/[\s,.\-]*\b(in\s+(very\s+)?(short|brief)|very\s+short|keep\s+it\s+(very\s+)?(short|brief)|briefly|please|pls)\b[\s.!?]*$/i, '')
+  // leading filler
+  t = t.replace(/^(hey|hi|hello)\b[\s,]*/i, '')
+  t = t.replace(/^(can|could|would|will)\s+you\s+(please\s+)?/i, '')
+  t = t.replace(/^(please\s+)?(give|show|tell|send|share|provide|help)\s+me\s+(with\s+|about\s+|the\s+|a\s+|an\s+)?/i, '')
+  t = t.replace(/^let\s+me\s+know\s+(about\s+)?/i, '')
+  t = t.replace(/[\s?!.,]+$/, '').trim()
+  if (t.length < 2) t = original.replace(/[\s?!.,]+$/, '')
+  t = t.charAt(0).toUpperCase() + t.slice(1)
+  const MAX = 36
+  if (t.length > MAX) {
+    const cut = t.slice(0, MAX)
+    t = cut.slice(0, cut.lastIndexOf(' ') > 15 ? cut.lastIndexOf(' ') : MAX) + '…'
+  }
+  return t
+}
+
+function getConversationTitle(messages) {
+  const firstUserMsg = (messages || []).find(m => m.role === 'user')
+  if (!firstUserMsg) return 'New conversation'
+  return makeTopicTitle(firstUserMsg.content)
+}
+
+const suggestions = [
+  { label: 'Career planning', prompt: 'Help me plan my career growth for the next 2 years' },
+  { label: 'Improve my resume', prompt: 'How can I improve my resume for a software engineer role?' },
+  { label: 'Prepare for an interview', prompt: 'Help me prepare for an AI/ML interview' },
+  { label: 'Learn a new skill', prompt: 'I want to learn a new skill, where should I start?' },
+]
+
+function getAgentMeta(intent) {
+  const map = {
+    career: { label: 'Career' },
+    resume: { label: 'Resume' },
+    interview: { label: 'Interview' },
+    learning: { label: 'Learning' },
+    recruitment: { label: 'Recruitment' },
+    business: { label: 'Business' },
+  }
+  return map[intent] || null
+}
+
+function MarkdownContent({ text }) {
+  if (!text) return null
+  return (
+    <div className="markdown">
+      <ReactMarkdown
+        components={{
+          h1: ({ ...props }) => <h1 className="md-h1" {...props} />,
+          h2: ({ ...props }) => <h2 className="md-h2" {...props} />,
+          h3: ({ ...props }) => <h3 className="md-h3" {...props} />,
+          p: ({ ...props }) => <p className="md-p" {...props} />,
+          ul: ({ ...props }) => <ul className="md-ul" {...props} />,
+          ol: ({ ...props }) => <ol className="md-ol" {...props} />,
+          li: ({ ...props }) => <li className="md-li" {...props} />,
+          strong: ({ ...props }) => <strong {...props} />,
+          em: ({ ...props }) => <em {...props} />,
+          a: ({ ...props }) => <a className="md-link" target="_blank" rel="noopener noreferrer" {...props} />,
+          code: ({ inline, children, ...props }) => {
+            if (inline) return <code className="md-inline-code" {...props}>{children}</code>
+            return <code className="md-code-block" {...props}>{children}</code>
+          },
+          pre: ({ ...props }) => <pre className="md-pre" {...props} />,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function IconChat(props) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M21 11.5a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-9a2.5 2.5 0 0 1 2.5-2.5h10A2.5 2.5 0 0 1 21 11.5Z" />
+    </svg>
+  )
+}
+function IconBriefcase(props) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
+      <rect x="3" y="7" width="18" height="12" rx="1.5" />
+      <path d="M8 7V5.5a2.5 2.5 0 0 1 2.5-2.5h3A2.5 2.5 0 0 1 16 5.5V7" />
+      <path d="M3 11.5h18" />
+    </svg>
+  )
+}
+function IconPlus(props) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
+function App() {
+  const [status, setStatus] = useState('checking')
+  const [conversations, setConversations] = useState(() => loadConversations())
+  const [currentConversationId, setCurrentConversationId] = useState(() => {
+    // On fresh session (browser refresh), create new conversation instead of restoring
+    if (isFreshSession()) {
+      markSessionInitialized()
+      const id = generateId()
+      setActiveConversationId(id)
+      return id
+    }
+    // Within same session, restore active conversation
+    return getActiveConversationId()
+  })
+  const [inputValue, setInputValue] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [error, setError] = useState(null)
+  const [interviewView, setInterviewView] = useState('chat')
+  const [scheduledInterviewId, setScheduledInterviewId] = useState(null)
+  const [lobbyInterviewId, setLobbyInterviewId] = useState(null)
+  const [sessionInterviewId, setSessionInterviewId] = useState(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const voice = useChatVoice()
+  const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
+  const ttsBufferRef = useRef('')
+  const resumeListenRef = useRef(false)   // after the answer has been read aloud, start listening again
+  const inputValueRef = useRef('')
+  const conversationsRef = useRef(conversations)
+  const abortControllerRef = useRef(null)
+
+  useEffect(() => {
+    conversationsRef.current = conversations
+  }, [conversations])
+
+  const currentConversation = conversations.find(c => c.id === currentConversationId)
+  const messages = currentConversation?.messages || []
+
+  useEffect(() => {
+    let mounted = true
+    async function fetchHealth() {
+      try {
+        await checkBackendHealth()
+        if (mounted) setStatus('connected')
+      } catch {
+        if (mounted) setStatus('disconnected')
+      }
+    }
+    fetchHealth()
+    const id = setInterval(fetchHealth, 30000)
+    return () => {
+      mounted = false
+      clearInterval(id)
+    }
+  }, [])
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    if (conversations.length > 0) {
+      saveConversations(conversations)
+    }
+  }, [conversations])
+
+  const updateCurrentConversation = useCallback((updater, convId) => {
+    const targetId = convId ?? currentConversationId
+    setConversations(prev => {
+      const idx = prev.findIndex(c => c.id === targetId)
+      if (idx === -1) return prev
+      const updated = [...prev]
+      updated[idx] = { ...updated[idx], ...updater(updated[idx]), updatedAt: Date.now() }
+      return updated
+    })
+  }, [currentConversationId])
+
+  // Chat voice: handle final transcript -> input, preserve typed text
+  // The hook pushes the full live text (typed text + speech so far) on every result
+  const { setOnFinal } = voice
+  useEffect(() => {
+    setOnFinal((liveText) => {
+      if (liveText != null) setInputValue(liveText)
+    })
+  }, [setOnFinal])
+
+  // Voice assistant: once the answer is finished AND fully read aloud, listen again (only if voice is still ON)
+  useEffect(() => {
+    if (!resumeListenRef.current) return
+    if (isGenerating || voice.isSpeaking) return
+    const t = setTimeout(() => {
+      if (!resumeListenRef.current) return
+      if (!voice.isVoiceOn()) { resumeListenRef.current = false; return }
+      if (voice.hasPendingSpeech()) return // more sentences queued; this effect runs again when speech ends
+      resumeListenRef.current = false
+      voice.startListening(inputValueRef.current)
+    }, 600)
+    return () => clearTimeout(t)
+  }, [isGenerating, voice.isSpeaking, voice.voiceOn]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const sendMessage = async (text) => {
+    const message = text.trim()
+    if (!message || isLoading) return
+    // Sending: pause the microphone (so it can't hear the AI's spoken reply). Voice mode stays ON:
+    // the AI reads the answer aloud, then listening resumes.
+    if (voice.isVoiceOn()) {
+      voice.stopListening()
+      resumeListenRef.current = true
+    }
+
+    let activeConvId = currentConversationId
+
+    // Ensure we have a current conversation - create one if needed
+    if (!activeConvId) {
+      activeConvId = generateId()
+      setCurrentConversationId(activeConvId)
+      setActiveConversationId(activeConvId)
+    }
+
+    // Ensure conversation exists in the list (for new chats that haven't sent a message yet)
+    const convExists = conversationsRef.current.some(c => c.id === activeConvId)
+    if (!convExists) {
+      const newConv = { id: activeConvId, messages: [], createdAt: Date.now(), updatedAt: Date.now() }
+      setConversations(prev => [...prev, newConv])
+    }
+
+    // Prevent overlapping speech: cancel any ongoing TTS before new turn and reset streaming buffer
+    ttsBufferRef.current = ''
+    if (voice.isSpeaking) voice.cancelSpeak()
+    voice.unmuteSpeech() // new answer -> the AI voice is allowed again
+
+    // Add user message to current conversation
+    const userMsg = { role: 'user', content: message }
+    updateCurrentConversation(conv => ({
+      ...conv,
+      messages: [...conv.messages, userMsg],
+      title: conv.title || getConversationTitle([...conv.messages, userMsg])
+    }), activeConvId)
+    setIsLoading(true)
+    setIsGenerating(true)
+    setError(null)
+
+    // Create new AbortController for this generation
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
+    let streamContent = ''
+    let streamIntent = null
+    let streamAgent = null
+    let gotChunk = false
+
+    // Add placeholder assistant message
+    updateCurrentConversation(conv => {
+      const assistantMsg = { role: 'assistant', content: '', model: 'qwen2.5:3b', intent: null, agent: null, streaming: true }
+      return { ...conv, messages: [...conv.messages, assistantMsg] }
+    }, activeConvId)
+
+    // Find the streaming assistant message by looking for the last assistant message with streaming=true
+    const updateAssistant = (content, intent, agent, streaming, done_reason) => {
+      updateCurrentConversation(conv => {
+        const messages = conv.messages
+        let idx = -1
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant' && (streaming || messages[i].streaming)) {
+            idx = i
+            break
+          }
+        }
+        if (idx === -1) return conv
+        const updated = [...messages]
+        updated[idx] = {
+          ...updated[idx],
+          content,
+          intent: intent !== undefined ? intent : updated[idx].intent,
+          agent: agent !== undefined ? agent : updated[idx].agent,
+          streaming,
+          done_reason: done_reason !== undefined ? done_reason : updated[idx].done_reason,
+        }
+        return { ...conv, messages: updated }
+      }, activeConvId)
+    }
+
+    // Streaming TTS helpers: split buffer into complete sentences/phrases for natural speech
+    const extractComplete = (buffer) => {
+      if (!buffer || !buffer.trim()) return { sentences: [], remainder: buffer }
+      const sentences = []
+      // Capture sentences ending with .!? or newline
+      const re = /[^.!?\n]+[.!?]+(?:\s+|$)|[^\n]+\n+/g
+      let lastIndex = 0
+      let m
+      while ((m = re.exec(buffer)) !== null) {
+        const s = m[0].trim()
+        if (s) sentences.push(s)
+        lastIndex = re.lastIndex
+      }
+      let remainder = buffer.slice(lastIndex)
+      // Fallback: if no complete sentence but buffer is long, split on last space to avoid indefinite buffering
+      if (sentences.length === 0 && remainder.trim().length > 140) {
+        const lastSpace = remainder.lastIndexOf(' ')
+        if (lastSpace > 80) {
+          const chunk = remainder.slice(0, lastSpace).trim()
+          if (chunk) sentences.push(chunk)
+          remainder = remainder.slice(lastSpace + 1)
+        }
+      }
+      return { sentences, remainder }
+    }
+
+    const shouldStreamSpeak = voice.ttsSupported
+
+    let streamDoneReason = null
+    try {
+      await sendChatMessageStream(message, {
+        onMeta: async (meta) => {
+          streamIntent = meta.intent
+          streamAgent = meta.agent
+          if (meta.conversation_id && meta.conversation_id !== activeConvId) {
+            activeConvId = meta.conversation_id
+            setCurrentConversationId(meta.conversation_id)
+            setActiveConversationId(meta.conversation_id)
+          }
+          updateAssistant(streamContent, streamIntent, streamAgent, true, undefined)
+        },
+        onChunk: async (chunk, done_reason) => {
+          gotChunk = true
+          streamContent += chunk
+          if (gotChunk) setIsLoading(false)
+          streamDoneReason = done_reason
+          updateAssistant(streamContent, streamIntent, streamAgent, true, done_reason)
+          await new Promise(r => setTimeout(r, 0))
+          if (shouldStreamSpeak && chunk && !chunk.startsWith('Error:')) {
+            ttsBufferRef.current += chunk
+            const { sentences, remainder } = extractComplete(ttsBufferRef.current)
+            if (sentences.length > 0) {
+              ttsBufferRef.current = remainder
+              sentences.forEach((s) => voice.queueSpeak(s))
+            }
+          }
+        },
+        onError: (detail) => {
+          throw new Error(detail)
+        },
+        conversationId: activeConvId,
+        signal: controller.signal,
+      })
+        if (!gotChunk) {
+          const data = await sendChatMessage(message, activeConvId)
+          if (data.conversation_id && data.conversation_id !== activeConvId) {
+            activeConvId = data.conversation_id
+            setCurrentConversationId(data.conversation_id)
+            setActiveConversationId(data.conversation_id)
+          }
+          updateAssistant(data.response, data.intent, data.agent, false, data.done_reason)
+          if (shouldStreamSpeak && data.response && !data.response.startsWith('Error:')) {
+            ttsBufferRef.current = ''
+            voice.queueSpeak(data.response)
+          }
+        } else {
+          const finalStream = streamContent || '(no response)'
+          updateAssistant(finalStream, streamIntent, streamAgent, false, streamDoneReason)
+          if (shouldStreamSpeak && ttsBufferRef.current.trim()) {
+            const remaining = ttsBufferRef.current.trim()
+            ttsBufferRef.current = ''
+            if (remaining && !remaining.startsWith('Error:')) {
+              voice.queueSpeak(remaining)
+            }
+          }
+        }
+      // Update conversation title after first exchange
+      updateCurrentConversation(conv => {
+        if (conv.title) return conv
+        return { ...conv, title: getConversationTitle(conv.messages) }
+      }, activeConvId)
+    } catch (err) {
+      // Handle user-initiated stop (AbortError) - preserve partial response, don't show error
+      if (err.name === 'AbortError' || err.message === 'Aborted') {
+        // Generation was stopped by user - keep partial response as-is
+        updateAssistant(streamContent || '(stopped)', streamIntent, streamAgent, false, streamDoneReason)
+      } else {
+        // On streaming error, cancel pending TTS and clear buffer to avoid stale speech
+        ttsBufferRef.current = ''
+        if (voice.isSpeaking) voice.cancelSpeak()
+        if (!gotChunk) {
+          try {
+            const data = await sendChatMessage(message, activeConvId)
+            if (data.conversation_id && data.conversation_id !== activeConvId) {
+              activeConvId = data.conversation_id
+              setCurrentConversationId(data.conversation_id)
+              try { localStorage.setItem(CURRENT_CONV_KEY, data.conversation_id) } catch {}
+            }
+            updateAssistant(data.response, data.intent, data.agent, false, data.done_reason)
+            if (shouldStreamSpeak && data.response && !data.response.startsWith('Error:')) {
+              voice.queueSpeak(data.response)
+            }
+            updateCurrentConversation(conv => {
+              if (conv.title) return conv
+              return { ...conv, title: getConversationTitle(conv.messages) }
+            }, activeConvId)
+          } catch (fallbackErr) {
+            setError(fallbackErr.message)
+            updateAssistant(`Error: ${fallbackErr.message}`, null, null, false)
+            updateCurrentConversation(conv => {
+              const messages = conv.messages
+              let idx = -1
+              for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'assistant') {
+                  idx = i
+                  break
+                }
+              }
+              if (idx !== -1) {
+                const updated = [...messages]
+                updated[idx] = { ...updated[idx], isError: true }
+                return { ...conv, messages: updated }
+              }
+              return conv
+            }, activeConvId)
+          }
+        } else {
+          setError(err.message)
+          updateAssistant(streamContent + `\n\nError: ${err.message}`, streamIntent, streamAgent, false, streamDoneReason)
+          updateCurrentConversation(conv => {
+            if (conv.title) return conv
+            return { ...conv, title: getConversationTitle(conv.messages) }
+          }, activeConvId)
+        }
+      }
+    } finally {
+      setIsLoading(false)
+      setIsGenerating(false)
+      abortControllerRef.current = null
+      inputRef.current?.focus()
+    }
+  }
+
+  const handleSend = async (e) => {
+    e.preventDefault()
+    if (voice.isSpeaking) {
+      voice.cancelSpeak()
+      ttsBufferRef.current = ''
+    }
+    const finalText = inputValue.trim()
+    if (!finalText) return
+    setInputValue('')
+    await sendMessage(finalText)
+  }
+
+  const stopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    // Cancel any pending TTS for the cancelled response
+    if (voice.isSpeaking) voice.cancelSpeak()
+    ttsBufferRef.current = ''
+  }, [voice])
+
+  // ONE switch for the voice assistant:
+  //  ON  -> you can speak your question, and the AI reads its answer aloud until the answer ends
+  //  OFF -> microphone off and AI voice off immediately (even in the middle of an answer); text only
+  const handleVoiceToggle = () => {
+    if (voice.isVoiceOn() || voice.isListening) {
+      resumeListenRef.current = false
+      voice.stopVoice()
+      ttsBufferRef.current = ''
+      return
+    }
+    if (isGenerating) {
+      // Turned on while an answer is streaming: read the rest aloud, listen once it has finished
+      voice.enableSpeechOnly()
+      resumeListenRef.current = true
+      return
+    }
+    resumeListenRef.current = false
+    voice.startListening(inputValue) // keeps whatever is already typed
+  }
+
+  const handleInputChange = (e) => {
+    // Typing by hand takes over from the mic (otherwise the next speech result would overwrite the typing)
+    if (voice.isListening) voice.stopListening()
+    setInputValue(e.target.value)
+    // If user types while speaking, cancel speech to prevent overlap
+    if (voice.isSpeaking) {
+      voice.cancelSpeak()
+      ttsBufferRef.current = ''
+    }
+  }
+
+  // Display value: preserve typed text + interim transcript when listening
+  const displayValue = inputValue
+  inputValueRef.current = inputValue
+
+  const handleSuggestion = (prompt) => {
+    if (voice.isSpeaking) {
+      voice.cancelSpeak()
+      ttsBufferRef.current = ''
+    }
+    sendMessage(prompt)
+  }
+
+  const handleNewChat = () => {
+    resumeListenRef.current = false
+    if (voice.isListening) voice.stopListening()
+    if (voice.isSpeaking) voice.cancelSpeak()
+    if (abortControllerRef.current) abortControllerRef.current.abort()
+    ttsBufferRef.current = ''
+    setError(null)
+    setInputValue('')
+    setIsGenerating(false)
+    const id = generateId()
+    setCurrentConversationId(id)
+    setActiveConversationId(id)
+    setInterviewView('chat')
+    setSidebarOpen(false)
+  }
+
+  const switchConversation = (id) => {
+    resumeListenRef.current = false
+    if (voice.isListening) voice.stopListening()
+    if (voice.isSpeaking) voice.cancelSpeak()
+    if (abortControllerRef.current) abortControllerRef.current.abort()
+    ttsBufferRef.current = ''
+    setError(null)
+    setInputValue('')
+    setIsGenerating(false)
+    setCurrentConversationId(id)
+    setActiveConversationId(id)
+    setInterviewView('chat')
+    setSidebarOpen(false)
+  }
+
+  const isInterviewMode = interviewView !== 'chat'
+
+  return (
+    <div className="app">
+      <header className="header">
+        <div className="header-inner">
+          <div className="header-left">
+            <button className="sidebar-toggle" aria-label="Toggle sidebar" onClick={() => setSidebarOpen(o => !o)}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+            <div className="brand">
+              <div className="brand-mark">◈</div>
+              <div className="brand-text">
+                <span className="brand-name">Ardhnarishwar Solver</span>
+                <span className="brand-sub">AI Career & Professional Assistant</span>
+              </div>
+            </div>
+          </div>
+          <div className="header-status" title={status === 'connected' ? 'Backend connected' : status === 'checking' ? 'Checking...' : 'Backend unavailable'}>
+            <span className={`status-dot ${status}`} />
+            <span className="status-label">{status === 'connected' ? 'AI Online' : status === 'checking' ? 'Connecting…' : 'Offline'}</span>
+          </div>
+        </div>
+      </header>
+
+      <div className="app-layout">
+        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+          <button className="new-chat-btn" onClick={handleNewChat}>
+            <IconPlus /> New chat
+          </button>
+
+          <nav className="sidebar-nav" aria-label="Primary">
+            <button className={`side-nav-item ${interviewView === 'chat' ? 'active' : ''}`} onClick={() => { setInterviewView('chat'); setSidebarOpen(false) }}>
+              <IconChat /> Chat
+            </button>
+            <button className={`side-nav-item ${isInterviewMode ? 'active' : ''}`} onClick={() => { setInterviewView('schedule'); setSidebarOpen(false) }}>
+              <IconBriefcase /> AI Interview
+            </button>
+          </nav>
+
+          <div className="sidebar-section">
+            <div className="sidebar-label">Recent</div>
+            {conversations.length === 0 ? (
+              <div className="recent-empty">No conversations yet</div>
+            ) : (
+              <div className="recent-list">
+                {conversations
+                  .slice()
+                  .sort((a, b) => b.updatedAt - a.updatedAt)
+                  .map((conv) => (
+                    <button
+                      key={conv.id}
+                      className={`recent-item ${currentConversationId === conv.id ? 'active' : ''}`}
+                      onClick={() => switchConversation(conv.id)}
+                      title={conv.title || getConversationTitle(conv.messages)}
+                    >
+                      <IconChat />
+                      <span>{conv.title || getConversationTitle(conv.messages)}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+
+          <div className="sidebar-footer">
+            <div className="sidebar-hint">Conversations are local to this browser.</div>
+          </div>
+        </aside>
+
+        {sidebarOpen && <button className="sidebar-backdrop" aria-label="Close sidebar" onClick={() => setSidebarOpen(false)} />}
+
+        <div className="main-column">
+          <main className="main">
+            {interviewView === 'schedule' ? (
+              <div className="workspace workspace-interview">
+                <InterviewSchedule
+                  onScheduled={(id) => { setScheduledInterviewId(id); setLobbyInterviewId(id); setInterviewView('scheduled') }}
+                  onCancelView={() => setInterviewView('chat')}
+                />
+                <div className="workspace-footer">
+                  <button className="btn-text" onClick={() => setInterviewView('list')}>View scheduled interviews</button>
+                </div>
+              </div>
+            ) : interviewView === 'scheduled' && scheduledInterviewId ? (
+              <div className="workspace workspace-interview">
+                <InterviewScheduledCard
+                  interviewId={scheduledInterviewId}
+                  onView={(id) => { setLobbyInterviewId(id); setInterviewView('lobby') }}
+                />
+                <div className="workspace-footer">
+                  <button className="btn-secondary" onClick={() => setInterviewView('chat')}>Back to chat</button>
+                  <button className="btn-text" onClick={() => setInterviewView('list')}>View all interviews</button>
+                </div>
+              </div>
+            ) : interviewView === 'lobby' && lobbyInterviewId ? (
+              <div className="workspace workspace-interview">
+                <InterviewLobby
+                  interviewId={lobbyInterviewId}
+                  onBack={() => setInterviewView('list')}
+                  onStartSession={(id) => { setSessionInterviewId(id); setInterviewView('session') }}
+                />
+              </div>
+            ) : interviewView === 'session' && sessionInterviewId ? (
+              <div className="workspace workspace-interview workspace-session">
+                <InterviewSession
+                  interviewId={sessionInterviewId}
+                  onBack={() => setInterviewView('lobby')}
+                  onComplete={() => {}}
+                />
+              </div>
+            ) : interviewView === 'list' ? (
+              <div className="workspace workspace-interview">
+                <div className="workspace-head">
+                  <h2>AI Interview</h2>
+                  <span>Scheduled interviews</span>
+                </div>
+                <InterviewList onSelect={(id) => { setLobbyInterviewId(id); setInterviewView('lobby') }} onClose={() => setInterviewView('chat')} />
+                <div className="workspace-footer">
+                  <button className="btn-primary" onClick={() => setInterviewView('schedule')}>Schedule new interview</button>
+                  <button className="btn-secondary" onClick={() => setInterviewView('chat')}>Back to chat</button>
+                </div>
+              </div>
+            ) : (
+              <div className="workspace workspace-chat">
+                <div className="messages-area">
+                  {messages.length === 0 ? (
+                    <div className="welcome">
+                      <h1 className="welcome-title">How can I help you today?</h1>
+                      <p className="welcome-subtitle">Ask about career growth, resumes, interviews, or learning paths.</p>
+                      <div className="suggestion-chips">
+                        {suggestions.map((s) => (
+                          <button key={s.label} className="chip" onClick={() => handleSuggestion(s.prompt)} disabled={status === 'disconnected' || isLoading}>
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="messages">
+                      {messages.map((msg, idx) => {
+                        if (msg.role === 'user') {
+                          return (
+                            <div key={idx} className="msg-row user">
+                              <div className="bubble bubble-user">{msg.content}</div>
+                            </div>
+                          )
+                        }
+                        const agentMeta = msg.intent ? getAgentMeta(msg.intent) : null
+                        const showThinking = msg.streaming && !msg.content
+                        return (
+                          <div key={idx} className={`msg-row assistant ${msg.isError ? 'error' : ''}`}>
+                            <div className="assistant-avatar">◈</div>
+                            <div className="bubble bubble-assistant">
+                              <div className="assistant-label">Ardhnarishwar Solver</div>
+                              {showThinking ? (
+                                <div className="thinking">
+                                  <span>Thinking</span>
+                                  <span className="dots"><i></i><i></i><i></i></span>
+                                </div>
+                              ) : (
+                                <div className="bubble-content"><MarkdownContent text={msg.content} /></div>
+                              )}
+                              {(msg.intent || msg.model) && !showThinking && (
+                                <div className="meta-badges">
+                                  {agentMeta && (
+                                    <span className="badge badge-agent">{agentMeta.label}</span>
+                                  )}
+                                  {!agentMeta && msg.intent && (
+                                    <span className="badge badge-agent">{msg.intent}</span>
+                                  )}
+                                  {msg.model && <span className="badge badge-model">{msg.model === 'qwen2.5:3b' ? 'Qwen 2.5 3B' : msg.model}</span>}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <div ref={messagesEndRef} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="composer-wrap">
+                  {error && <div className="error-banner">{error}</div>}
+                  {voice.error && <div className="error-banner voice-error" role="status">{voice.error}</div>}
+                  {!voice.isSupported && (
+                    <div className="voice-unsupported" role="status">
+                      Voice input is not available in this browser. Please use Chrome or Edge on desktop, or continue typing.
+                    </div>
+                  )}
+                  {voice.isListening ? (
+                    <div className="voice-listening-indicator" role="status" aria-live="polite">
+                      <span className="voice-dot" /> Listening — speak now
+                    </div>
+                  ) : voice.voiceOn && (
+                    <div className="voice-listening-indicator" role="status" aria-live="polite">
+                      <span className="voice-dot" /> {isGenerating || voice.isSpeaking ? 'Voice on — reading the answer aloud' : 'Voice on'}
+                    </div>
+                  )}
+                  <form onSubmit={handleSend} className={`composer ${voice.isListening ? 'composer--listening' : ''} ${voice.isSpeaking ? 'composer--speaking' : ''}`}>
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      value={displayValue}
+                      onChange={handleInputChange}
+                      placeholder={voice.isListening ? 'Listening…' : 'Ask anything…'}
+                      disabled={isLoading || status === 'disconnected'}
+                      className="composer-input"
+                      aria-label="Message input"
+                    />
+                    {voice.isSupported && (
+                      <button
+                        type="button"
+                        onClick={handleVoiceToggle}
+                        disabled={status === 'disconnected'}
+                        className={`composer-mic ${voice.voiceOn ? 'mic--listening' : ''}`}
+                        aria-label={voice.voiceOn ? 'Turn voice off' : 'Turn voice on'}
+                        title={voice.voiceOn ? 'Voice ON — click to turn off (mic and AI voice)' : 'Turn voice on (speak and hear the answer)'}
+                      >
+                        {voice.voiceOn ? (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="4" width="12" height="12" rx="2" /><line x1="12" y1="16" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></svg>
+                        ) : (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 14a3 3 0 003-3V6a3 3 0 00-6 0v5a3 3 0 003 3z" /><path d="M19 10a7 7 0 01-14 0" /><line x1="12" y1="19" x2="12" y2="22" /><line x1="8" y1="22" x2="16" y2="22" /></svg>
+                        )}
+                      </button>
+                    )}
+                    {voice.isSpeaking && (
+                      <button
+                        type="button"
+                        onClick={() => { voice.cancelSpeak(); ttsBufferRef.current = '' }}
+                        className="composer-mic mic--stop"
+                        aria-label="Stop speaking"
+                        title="Stop speaking"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+                      </button>
+                    )}
+                    {isGenerating ? (
+                      <button
+                        type="button"
+                        onClick={stopGeneration}
+                        disabled={status === 'disconnected'}
+                        className="composer-send composer-stop"
+                        aria-label="Stop generation"
+                        title="Stop generation"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+                      </button>
+                    ) : (
+                      <button type="submit" disabled={isLoading || !displayValue.trim() || status === 'disconnected'} className="composer-send" aria-label="Send">
+                        {isLoading ? (
+                          <span className="send-spinner" />
+                        ) : (
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" /></svg>
+                        )}
+                      </button>
+                    )}
+                  </form>
+                  <div className="composer-hint">
+                    {status === 'disconnected' ? 'Backend is disconnected. Please start the backend server.' : voice.voiceOn ? 'Voice on — press mic to turn off (mic and AI voice)' : 'Press Enter to send · Mic for voice input'}
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default App

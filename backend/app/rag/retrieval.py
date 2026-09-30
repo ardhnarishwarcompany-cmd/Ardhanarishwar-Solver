@@ -1,0 +1,138 @@
+import time
+from typing import List, Dict, Optional
+
+from app.rag.store import get_store
+
+
+DEFAULT_TOP_K = 3
+DEFAULT_THRESHOLD = 0.15  # cosine similarity minimum to be considered relevant
+
+# Simple LRU cache for retrieval (Phase 8): safe to cache repeated queries.
+# Key: (query.strip(), top_k, threshold, chunk_count, embedder_id) -> (timestamp, results)
+# Bounded to 64 entries, TTL 60s. Invalidated when store chunk_count changes.
+_RETRIEVAL_CACHE: Dict[tuple, tuple] = {}
+_RETRIEVAL_CACHE_MAX = 64
+_RETRIEVAL_CACHE_TTL = 60.0
+
+
+def _vectorize_query(query: str, store) -> Dict[str, float]:
+    # Use OOV-inclusive for query so new terms still contribute
+    return store.embedder.vectorize_with_oov(query)
+
+
+def retrieve(query: str, top_k: int = DEFAULT_TOP_K, threshold: float = DEFAULT_THRESHOLD) -> List[Dict]:
+    """Similarity retrieval from local vector index.
+
+    Returns list of {
+        chunk_id, doc_id, text, score, metadata {title, source}
+    } sorted by score desc, filtered by threshold.
+    Empty if no relevant context.
+    """
+    if not query or not isinstance(query, str) or not query.strip():
+        return []
+
+    store = get_store()
+    if store.chunk_count() == 0:
+        return []
+    # Phase 8: check cache
+    cache_key = (query.strip(), top_k, threshold, store.chunk_count(), id(store.embedder))
+    now = time.monotonic()
+    cached = _RETRIEVAL_CACHE.get(cache_key)
+    if cached is not None:
+        ts, results = cached
+        if now - ts < _RETRIEVAL_CACHE_TTL:
+            return results
+        else:
+            _RETRIEVAL_CACHE.pop(cache_key, None)
+
+    query_vec = _vectorize_query(query.strip(), store)
+    if not query_vec:
+        return []
+
+    scored = []
+    for cid, vec in store.vectors.items():
+        score = store.embedder.cosine(query_vec, vec)
+        if score >= threshold:
+            chunk = store.chunks[cid]
+            scored.append({
+                "chunk_id": cid,
+                "doc_id": chunk["doc_id"],
+                "text": chunk["text"],
+                "score": round(score, 4),
+                "metadata": {
+                    "title": chunk["metadata"]["title"],
+                    "source": chunk["metadata"]["source"],
+                    "doc_id": chunk["doc_id"],
+                    "chunk_index": chunk["metadata"]["chunk_index"],
+                },
+            })
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    results = scored[:top_k]
+    # Store in cache with LRU eviction
+    if len(_RETRIEVAL_CACHE) >= _RETRIEVAL_CACHE_MAX:
+        # evict oldest
+        oldest = min(_RETRIEVAL_CACHE.items(), key=lambda kv: kv[1][0])
+        _RETRIEVAL_CACHE.pop(oldest[0], None)
+    _RETRIEVAL_CACHE[cache_key] = (now, results)
+    return results
+
+
+def clear_retrieval_cache() -> None:
+    _RETRIEVAL_CACHE.clear()
+
+
+def retrieve_with_threshold(query: str, top_k: int = DEFAULT_TOP_K, threshold: float = DEFAULT_THRESHOLD) -> Dict:
+    """Wrapper returning structured result with fallback flag."""
+    results = retrieve(query, top_k=top_k, threshold=threshold)
+    return {
+        "query": query,
+        "results": results,
+        "has_results": len(results) > 0,
+        "count": len(results),
+    }
+
+
+def format_context(results: List[Dict]) -> str:
+    """Format retrieval results as context string for LLM prompt.
+
+    Provides factual context from approved documents without exposing retrieval mechanics.
+    Treats retrieved docs as untrusted — sanitized, bounded, clearly delimited.
+    """
+    if not results:
+        return ""
+    # Phase 9: sanitize retrieved text to neutralize prompt injection
+    try:
+        from app.services.security import sanitize_retrieved_text
+    except Exception:
+        def sanitize_retrieved_text(x, max_len=2000): return x[:2000]
+    lines = ["Background facts (use them only if relevant to the question; ignore them otherwise; never mention them to the user):"]
+    for r in results:
+        src = r["metadata"]["source"]
+        title = r["metadata"]["title"]
+        sanitized = sanitize_retrieved_text(r["text"], max_len=2000)
+        lines.append(f"[Source: {title} | {src} | chunk {r['metadata']['chunk_index']} | score {r['score']}]")
+        lines.append(f"<context>\n{sanitized}\n</context>")
+        lines.append("---")
+    lines.append("END OF CONTEXT. If the context above is not relevant to the question, ignore it and answer from your own knowledge. Answer the user directly and naturally. Do not mention context, documents, retrieval, RAG, sources, or internal system implementation unless the user explicitly asks how the assistant works.")
+    return "\n".join(lines)
+
+
+def build_grounded_prompt(user_message: str, retrieved_results: List[Dict]) -> str:
+    """Build prompt with injected context or fallback."""
+    if retrieved_results:
+        context = format_context(retrieved_results)
+        return (
+            f"{context}\n\n"
+            f"User question: {user_message}\n\n"
+            "Instructions: Use the provided context only if it is relevant to the question; if it is not relevant, ignore it completely and answer fully and helpfully from your own knowledge. Never say that the context lacks information. "
+            "Answer the user directly and naturally. Do not mention context, documents, retrieval, RAG, sources, or internal system implementation unless the user explicitly asks how the assistant works. "
+            "Do not invent facts about Recruweb or Ardhnarishwar that are not in the context."
+        )
+    else:
+        return (
+            f"User question: {user_message}\n\n"
+            "Note: No relevant documents were found in the approved local knowledge base for this query. "
+            "Answer fully and helpfully from your own knowledge. Do not say you lack information. "
+            "If the question seems to require company-specific data, state that no approved documents were found and offer general best-practice guidance."
+        )

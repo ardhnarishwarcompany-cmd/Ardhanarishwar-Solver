@@ -1,0 +1,71 @@
+from typing import Dict
+import re
+
+from app.services.llm import generate_response
+from app.services.answer_style import COMMON_GUIDANCE
+
+
+SYSTEM_PROMPT = """You are the Interview Coach for Ardhnarishwar Solver (local Qwen 2.5 3B, no external APIs). Single-turn guidance only; do not build a multi-turn state machine.
+
+Responsibility: Interview preparation – technical, behavioral, mock guidance, and feedback tips.
+
+Prioritize: The user's role/level and actual request. Tailor questions and tips to the role if mentioned (e.g., backend system design vs. AI/ML), otherwise note the general nature and offer tailored follow-up.
+
+Prevent generic answers: Do not reuse the same 10 generic questions for every role. Provide role-relevant examples and preparation strategy.
+
+Be actionable: Give 3-5 preparation steps, example questions with what interviewers assess, and STAR framework guidance for behavioral. Use bullets.
+
+Match detail to complexity: Simple tip request → concise list; 'mock interview for X' → role-specific question set + preparation plan.
+
+Clarifying: If role/level is missing for a tailored request, provide general prep and ask for role/level for a more specific set.
+
+Safeguards: Never claim access to company-specific question banks, live interview databases, or verified employer data. State that examples are general best practices.
+
+Important: Answer the user directly and naturally. Do not mention context, documents, retrieval, RAG, sources, or internal system implementation unless the user explicitly asks how the assistant works. Use provided context for factual accuracy when relevant, but do not mention it."""
+SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n" + COMMON_GUIDANCE
+
+
+def _extract_rag_context(message: str) -> tuple[str, str | None]:
+    """Extract RAG context from augmented message if present.
+    
+    Returns (clean_message, rag_context) where rag_context is None if not found.
+    """
+    # Check for the RAG context format injected by orchestrator
+    # Pattern: RAG context + "\n\nUser question: " + message + "\n\nInstruction: ..."
+    rag_marker = "User question:"
+    if rag_marker in message:
+        parts = message.split(rag_marker, 1)
+        if len(parts) == 2:
+            rag_context = parts[0].strip()
+            # Remove the instruction part from user question
+            user_part = parts[1]
+            instr_marker = "Instruction:"
+            if instr_marker in user_part:
+                user_part = user_part.split(instr_marker, 1)[0].strip()
+            return user_part, rag_context
+    return message, None
+
+
+async def get_response(message: str, conversation_history: str = None) -> Dict[str, str]:
+    # Extract RAG context if present (injected by orchestrator)
+    user_message, rag_context = _extract_rag_context(message)
+    
+    # Build prompt with conversation history and RAG context
+    if conversation_history:
+        prompt = f"Recent conversation (use only if relevant to current message; do not repeat verbatim unless asked):\n{conversation_history}\n\nCurrent message: {user_message}"
+    else:
+        prompt = user_message
+    
+    # Inject RAG context if available
+    if rag_context:
+        prompt = f"{rag_context}\n\nUser question: {prompt}\n\nInstruction: Use the provided context only if it is relevant to the question; otherwise ignore it and answer fully from your own knowledge. Never say the context lacks information. Answer the user directly and naturally. Do not mention context, documents, retrieval, RAG, sources, or internal system implementation unless the user explicitly asks how the assistant works."
+    
+    response = await generate_response(prompt, system_prompt=SYSTEM_PROMPT)
+    return {"response": response.response, "intent": "interview", "agent": "interview"}
+
+async def get_system_prompt() -> str:
+    return SYSTEM_PROMPT
+
+
+def get_name() -> str:
+    return "Interview Coach"
