@@ -1,0 +1,96 @@
+/* ===== Ardhnarishwar brand: 3D glowing circle logo ===== */
+.brand-logo{
+  position:relative; display:inline-block; flex:0 0 auto;
+  border-radius:50%; overflow:hidden; padding:0; line-height:0;
+  background:#1b1030;
+  box-shadow:
+    0 0 0 2px rgba(212,175,55,.65),
+    0 0 14px rgba(168,85,247,.65),
+    0 0 30px rgba(45,212,191,.35),
+    0 8px 18px rgba(0,0,0,.55),
+    inset 0 -4px 8px rgba(0,0,0,.4),
+    inset 0 3px 6px rgba(255,255,255,.25);
+  transition:transform .3s ease, box-shadow .3s ease;
+  animation:brandGlow 3.2s ease-in-out infinite;
+}
+.brand-logo img{
+  width:100%; height:100%; display:block;
+  object-fit:cover; border-radius:50%;   /* fills circle, no blank/corners */
+  transform:scale(1.02);
+}
+/* glossy 3D shine */
+.brand-logo::after{
+  content:""; position:absolute; inset:0; border-radius:50%; pointer-events:none;
+  background:radial-gradient(circle at 30% 22%, rgba(255,255,255,.35), transparent 45%);
+}
+.brand-logo:hover{ transform:translateY(-2px) scale(1.06); }
+.brand-float{ animation:brandGlow 3.2s ease-in-out infinite, brandFloat 4s ease-in-out infinite; }
+
+@keyframes brandGlow{
+  0%,100%{ filter:drop-shadow(0 0 4px rgba(168,85,247,.6)); }
+  50%{ filter:drop-shadow(0 0 12px rgba(45,212,191,.85)); }
+}
+@keyframes brandFloat{ 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+
+/* user avatar (same circle style, teal-gold) */
+.user-avatar{
+  display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto;
+  border-radius:50%; font-weight:700; color:#fff;
+  background:linear-gradient(135deg,#7c3aed,#14b8a6);
+  box-shadow:0 0 0 2px rgba(212,175,55,.65), 0 0 14px rgba(20,184,166,.6),
+             0 6px 14px rgba(0,0,0,.5), inset 0 3px 6px rgba(255,255,255,.3);
+}
+
+
+/* ===== 3D bouncing ===== */
+.user-avatar{
+  padding:0; overflow:hidden; line-height:0; background:none;
+  box-shadow:
+    0 0 0 2px rgba(212,175,55,.7),
+    0 0 14px rgba(168,85,247,.65),
+    0 0 30px rgba(45,212,191,.35),
+    0 8px 18px rgba(0,0,0,.55),
+    inset 0 -4px 8px rgba(0,0,0,.35),
+    inset 0 3px 6px rgba(255,255,255,.25);
+}
+.user-avatar svg{ display:block; border-radius:50%; }
+
+.brand-logo, .user-avatar{
+  animation: brandBounce 2.4s ease-in-out infinite, brandGlow 3.2s ease-in-out infinite;
+  will-change: transform;
+}
+.user-avatar{ animation-delay:.5s, 0s; }
+
+/* welcome screen ka bada logo: zyada uchhalega */
+.brand-logo.brand-float{
+  animation: brandBounceBig 2.8s ease-in-out infinite, brandGlow 3.2s ease-in-out infinite;
+}
+
+/* header ka logo: halka bounce */
+.header .brand-logo{
+  width:40px !important; height:40px !important;
+  animation: brandBounceSmall 2.6s ease-in-out infinite, brandGlow 3.2s ease-in-out infinite;
+}
+
+@keyframes brandBounce{
+  0%,100%{ transform:perspective(320px) translateY(0) rotateY(0) scale(1,1); }
+  22%    { transform:perspective(320px) translateY(-9px) rotateY(18deg) scale(1.04); }
+  42%    { transform:perspective(320px) translateY(0) rotateY(0) scale(1.06,.93); }
+  58%    { transform:perspective(320px) translateY(-4px) rotateY(-14deg) scale(1); }
+  74%    { transform:perspective(320px) translateY(0) rotateY(0) scale(1,1); }
+}
+@keyframes brandBounceBig{
+  0%,100%{ transform:perspective(600px) translateY(0) rotateY(0) scale(1,1); }
+  25%    { transform:perspective(600px) translateY(-22px) rotateY(22deg) scale(1.05); }
+  45%    { transform:perspective(600px) translateY(0) rotateY(0) scale(1.07,.92); }
+  62%    { transform:perspective(600px) translateY(-9px) rotateY(-16deg) scale(1); }
+  80%    { transform:perspective(600px) translateY(0) rotateY(0) scale(1,1); }
+}
+@keyframes brandBounceSmall{
+  0%,100%{ transform:perspective(200px) translateY(0) rotateY(0); }
+  30%    { transform:perspective(200px) translateY(-3px) rotateY(16deg); }
+  60%    { transform:perspective(200px) translateY(0) rotateY(-12deg); }
+}
+@media (prefers-reduced-motion: reduce){
+  .brand-logo, .user-avatar{ animation:none !important; }
+}

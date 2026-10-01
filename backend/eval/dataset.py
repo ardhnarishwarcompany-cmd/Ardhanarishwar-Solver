@@ -1,4 +1,4 @@
-"""Evaluation dataset for Ardhnarishwar Solver — 7 domains, single + context + edge cases.
+"""Evaluation dataset for Ardhanarishwar Solver — 7 domains, single + context + edge cases.
 
 Design principles:
 - Representative of real user intent per domain (matches orchestrator keyword sets)
@@ -254,8 +254,8 @@ DATASET: List[Dict] = [
     {
         "id": "general-04",
         "domain": "general",
-        "message": "Explain what Ardhnarishwar Solver does",
-        "expected_keywords": ["Ardhnarishwar Solver", "career", "interview", "assistant"],
+        "message": "Explain what Ardhanarishwar Solver does",
+        "expected_keywords": ["Ardhanarishwar Solver", "career", "interview", "assistant"],
         "notes": "Meta question about product — general",
     },
     {

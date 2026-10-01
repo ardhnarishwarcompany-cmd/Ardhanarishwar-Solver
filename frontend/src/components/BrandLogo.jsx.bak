@@ -1,0 +1,25 @@
+import "./brand.css";
+
+/* Circle logo: 3D + glow. Use everywhere.
+   <BrandLogo size={44} />            -> AI avatar
+   <BrandLogo size={120} float />     -> hero / welcome screen
+   <UserAvatar size={44} name="Ravi"/> -> user avatar */
+export default function BrandLogo({ size = 44, float = false, className = "" }) {
+  return (
+    <span
+      className={`brand-logo ${float ? "brand-float" : ""} ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <img src="/logo.png" alt="Ardhnarishwar" draggable="false" />
+    </span>
+  );
+}
+
+export function UserAvatar({ size = 44, name = "You" }) {
+  const letter = (name || "U").trim().charAt(0).toUpperCase();
+  return (
+    <span className="user-avatar" style={{ width: size, height: size, fontSize: size * 0.44 }}>
+      {letter}
+    </span>
+  );
+}

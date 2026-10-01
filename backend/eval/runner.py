@@ -1,4 +1,4 @@
-"""Lightweight evaluation runner for Ardhnarishwar Solver.
+"""Lightweight evaluation runner for Ardhanarishwar Solver.
 
 Measures:
 - intent routing (vs expected)
@@ -379,7 +379,7 @@ async def evaluate_all(
 
 def print_summary(report: Dict[str, Any]) -> None:
     s = report["summary"]
-    print("\n=== Ardhnarishwar Solver Evaluation Summary ===")
+    print("\n=== Ardhanarishwar Solver Evaluation Summary ===")
     print(f"Mode: {s['mode']} | Total: {s['total']} | Routing accuracy: {s['routing_accuracy']} ({s['correct']}/{s['total']})")
     print("Per-domain accuracy:")
     for dom, acc in sorted(s["per_domain_accuracy"].items()):
@@ -408,7 +408,7 @@ def print_summary(report: Dict[str, Any]) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ardhnarishwar Solver evaluation runner")
+    parser = argparse.ArgumentParser(description="Ardhanarishwar Solver evaluation runner")
     parser.add_argument("--mock", action="store_true", help="Use mocked LLM responses (offline, no Ollama)")
     parser.add_argument("--output", type=str, default=None, help="Write JSON report to file")
     parser.add_argument("--routing-only", action="store_true", help="Only test intent routing (fastest, no LLM)")

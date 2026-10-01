@@ -137,7 +137,7 @@ def test_context_not_override_clear_intent():
     "Hello, how are you?",
     "Tell me a joke",
     "What's the weather like today?",
-    "Explain what Ardhnarishwar Solver does",
+    "Explain what Ardhanarishwar Solver does",
     "Thanks for your help!",
 ])
 def test_general_unrelated(msg):

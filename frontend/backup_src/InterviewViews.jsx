@@ -1,4 +1,3 @@
-import BrandLogo from './components/BrandLogo'
 import { useState, useEffect } from 'react'
 import { createInterview, getInterview, listInterviews, startInterview, cancelInterview, uploadResumeFile, startSession, getSession } from './interviewApi'
 
@@ -347,7 +346,7 @@ export function InterviewLobby({ interviewId, onBack, onStartSession }) {
   return (
     <div className="interview-lobby">
       <div className="lobby-header">
-        <div className="lobby-brand"><BrandLogo size={30} /> <span>ARDHNARISHWAR SOLVER AI</span></div>
+        <div className="lobby-brand">◈ ARDHNARISHWAR SOLVER AI</div>
         <div className="lobby-title">AI INTERVIEW</div>
       </div>
       <div className="lobby-card">

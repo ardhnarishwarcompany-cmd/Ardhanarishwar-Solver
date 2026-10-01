@@ -1,11 +1,11 @@
 # SAMPLE DATA - FOR TESTING ONLY
 # Synthetic product FAQ for RAG testing. Not real product data.
 
-Title: Sample Product FAQ - Ardhnarishwar Solver Platform
+Title: Sample Product FAQ - Ardhanarishwar Solver Platform
 Source: sample_product_faq.txt
 
-## What is Ardhnarishwar Solver? (Sample)
-Ardhnarishwar Solver is a sample AI platform demonstrating career, resume, interview, learning, recruitment and business assistance using a local LLM via Ollama.
+## What is Ardhanarishwar Solver? (Sample)
+Ardhanarishwar Solver is a sample AI platform demonstrating career, resume, interview, learning, recruitment and business assistance using a local LLM via Ollama.
 
 ## Pricing (Sample)
 This is a prototype. No commercial pricing exists. Sample pricing tier for testing: Free tier with local inference only.

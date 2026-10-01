@@ -695,20 +695,3 @@ html,body{height:100%}
   .camera-preview{width:104px;height:68px}
   .voice-header{flex-direction:column}
 }
-
-/* ===== Ardhnarishwar logo integration ===== */
-.brand{ display:flex; align-items:center; gap:12px; }
-.header .brand-logo{ box-shadow:0 0 0 2px rgba(212,175,55,.7), 0 0 16px rgba(168,85,247,.7), 0 0 34px rgba(45,212,191,.4), 0 6px 14px rgba(0,0,0,.5), inset 0 3px 6px rgba(255,255,255,.25); }
-
-.welcome > .brand-logo{
-  display:block; margin:0 auto 22px;
-  box-shadow:0 0 0 3px rgba(212,175,55,.75), 0 0 28px rgba(168,85,247,.75), 0 0 70px rgba(45,212,191,.45), 0 18px 34px rgba(0,0,0,.6), inset 0 -8px 14px rgba(0,0,0,.4), inset 0 6px 12px rgba(255,255,255,.28);
-}
-
-.msg-row{ display:flex; align-items:flex-start; gap:10px; }
-.msg-row.user{ flex-direction:row; justify-content:flex-end; }
-.msg-row.assistant{ flex-direction:row; justify-content:flex-start; }
-.msg-row .brand-logo, .msg-row .user-avatar{ margin-top:2px; }
-.msg-row.assistant .bubble-assistant{ min-width:0; }
-
-.lobby-brand, .session-brand{ display:inline-flex; align-items:center; gap:10px; }

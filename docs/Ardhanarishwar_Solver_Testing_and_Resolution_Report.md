@@ -1,8 +1,8 @@
-# Ardhnarishwar Solver
+# Ardhanarishwar Solver
 ## Testing, Bug Identification & Resolution Report
 
 **Date:** 2026-09-23  
-**Project:** Ardhnarishwar Solver — AI-Powered Career, Recruitment & Interview Assistant  
+**Project:** Ardhanarishwar Solver — AI-Powered Career, Recruitment & Interview Assistant  
 **Branch:** main  
 **Testing Mode:** Company-assigned QA / End-to-End Testing, Bug-Finding, Bug-Fixing & Regression Cycle  
 **Tester:** Muse Spark (OpenCode Agent) — automated + manual verification where required
@@ -11,7 +11,7 @@
 
 ### 1. Executive Summary
 
-**Objective:** Perform a complete end-to-end testing, bug-finding, bug-fixing, and regression cycle for the entire Ardhnarishwar Solver project (frontend, backend, agents, orchestrator, generative AI/Ollama, API, RAG, short-term/long-term memory, interview system, voice/proctoring, security, performance, error handling).
+**Objective:** Perform a complete end-to-end testing, bug-finding, bug-fixing, and regression cycle for the entire Ardhanarishwar Solver project (frontend, backend, agents, orchestrator, generative AI/Ollama, API, RAG, short-term/long-term memory, interview system, voice/proctoring, security, performance, error handling).
 
 **Scope Tested:** All subsystems listed in §3. 280 backend tests, frontend build/lint, evaluation framework (45 cases), 25+ API endpoints, 6 specialized agents, RAG workflow (ingestion→retrieval→context injection), short-term memory (10-turn bounded) and long-term memory (SQLite `user_memory.db`), full interview workflow (plan→questions→evaluation→report→persistence), browser voice/proctoring, security controls, performance latencies, and error-handling paths.
 

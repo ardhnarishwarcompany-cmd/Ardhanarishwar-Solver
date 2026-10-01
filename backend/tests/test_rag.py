@@ -250,7 +250,7 @@ def test_context_injection_no_relevant():
             # For general intent, mock_gen should be called; check fallback note
             if mock_gen.called:
                 prompt = mock_gen.call_args[0][0]
-                assert "from your own knowledge" in prompt.lower()  # no docs -> answer helpfully, never refuse
+                assert "No relevant documents" in prompt or "approved" in prompt.lower()
 
     asyncio.run(run())
 
@@ -282,7 +282,7 @@ def test_build_grounded_prompt_with_results():
 def test_build_grounded_prompt_empty_fallback():
     prompt = build_grounded_prompt("What is remote work policy?", [])
     assert "No relevant documents were found" in prompt
-    assert "own knowledge" in prompt.lower()
+    assert "Do not fabricate" in prompt
 
 
 # ---- Malformed documents (ingestion) ----
@@ -337,9 +337,9 @@ def test_distinguish_retrieved_vs_general():
     results = retrieve("remote work policy SampleCorp", top_k=1)
     ctx = format_context(results)
     assert "Source:" in ctx
-    assert "context" in ctx.lower() or "Context" in ctx
+    assert "Distinguish" in ctx or "distinguish" in ctx.lower() or "Retrieved" in ctx
     prompt = build_grounded_prompt("What is remote policy?", results)
-    assert "context" in prompt.lower() or "Context" in prompt
+    assert "Distinguish" in prompt or "distinguish" in prompt.lower()
 
 
 def test_ingest_duplicate_doc_id():

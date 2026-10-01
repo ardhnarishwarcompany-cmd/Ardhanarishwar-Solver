@@ -5,7 +5,6 @@ import { InterviewSchedule, InterviewScheduledCard, InterviewLobby, InterviewLis
 import { InterviewSession } from './InterviewSession'
 import { useChatVoice } from './useChatVoice'
 import './App.css'
-import BrandLogo, { UserAvatar } from './components/BrandLogo'
 
 const STORAGE_KEY = 'ard_conversations'
 const CURRENT_CONV_KEY = 'ard_conversation_id'
@@ -607,7 +606,7 @@ function App() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
             <div className="brand">
-              <BrandLogo size={44} />
+              <div className="brand-mark">◈</div>
               <div className="brand-text">
                 <span className="brand-name">Ardhnarishwar Solver</span>
                 <span className="brand-sub">AI Career & Professional Assistant</span>
@@ -723,7 +722,6 @@ function App() {
                 <div className="messages-area">
                   {messages.length === 0 ? (
                     <div className="welcome">
-                      <BrandLogo size={132} float />
                       <h1 className="welcome-title">How can I help you today?</h1>
                       <p className="welcome-subtitle">Ask about career growth, resumes, interviews, or learning paths.</p>
                       <div className="suggestion-chips">
@@ -741,7 +739,6 @@ function App() {
                           return (
                             <div key={idx} className="msg-row user">
                               <div className="bubble bubble-user">{msg.content}</div>
-                              <UserAvatar size={38} name="You" />
                             </div>
                           )
                         }
@@ -749,7 +746,7 @@ function App() {
                         const showThinking = msg.streaming && !msg.content
                         return (
                           <div key={idx} className={`msg-row assistant ${msg.isError ? 'error' : ''}`}>
-                            <BrandLogo size={38} />
+                            <div className="assistant-avatar">◈</div>
                             <div className="bubble bubble-assistant">
                               <div className="assistant-label">Ardhnarishwar Solver</div>
                               {showThinking ? (

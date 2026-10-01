@@ -1,4 +1,4 @@
-# Evaluation Framework — Ardhnarishwar Solver Phase 1
+# Evaluation Framework — Ardhanarishwar Solver Phase 1
 
 Lightweight, maintainable evaluation for the existing AI system. No dashboard, no external APIs, no architecture change.
 
@@ -46,7 +46,7 @@ python -m pytest tests/test_eval.py -v
 
 ## Output
 
-- Console: `=== Ardhnarishwar Solver Evaluation Summary ===` with per-domain routing accuracy, latency (mean/median/p95/min/max), relevance mean, completeness pass rate, hallucination/error counts, and top routing failures.
+- Console: `=== Ardhanarishwar Solver Evaluation Summary ===` with per-domain routing accuracy, latency (mean/median/p95/min/max), relevance mean, completeness pass rate, hallucination/error counts, and top routing failures.
 - JSON (if `--output`): `{ summary: {...}, results: [SingleResult], context_details: [...] }` with full response capture per case.
 
 ## Maintenance
